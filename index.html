@@ -5857,6 +5857,7 @@
           phase: 'idle',
           run: { queue: [], index: 0, results: [], topics: {} },
           servedIds: [],
+          servedQuestionKeys: [],
           answeredIds: [],
           summary: null,
           pendingNav: null
@@ -6352,29 +6353,48 @@
           const s = App.state.study;
           if (s.phase !== 'running') return null;
           s.servedIds = Array.isArray(s.servedIds) ? s.servedIds : [];
-          const served = new Set(s.servedIds);
+          s.servedQuestionKeys = Array.isArray(s.servedQuestionKeys) ? s.servedQuestionKeys : [];
+          const servedIds = new Set(s.servedIds);
+          const servedKeys = new Set(s.servedQuestionKeys);
 
-          while (s.run.index < s.run.queue.length && served.has(s.run.queue[s.run.index])) {
+          while (s.run.index < s.run.queue.length) {
+            const probeId = s.run.queue[s.run.index];
+            const probeQ = this.byId(probeId);
+            const probeKey = normalizeQuestionKey(probeQ && probeQ.question ? probeQ.question : probeId);
+            if (!servedIds.has(probeId) && !servedKeys.has(probeKey)) break;
             s.run.index += 1;
           }
 
           const id = s.run.queue[s.run.index];
           if (!id) return null;
+          const q = this.byId(id);
+          if (!q) return null;
+          const qKey = normalizeQuestionKey(q.question);
 
           if (s.currentQuestionId !== id) {
             s.currentQuestionId = id;
-            if (!served.has(id)) {
-              s.servedIds.push(id);
-              if (DEBUG) console.log('[quiz] served', id, 'index', s.run.index);
-            }
             s.selectedAnswers = [];
             s.answered = false;
             s.feedback = '';
             s.explanationVisible = false;
             App.state.lastQuestionStartAt = Date.now();
+          }
+
+          let touched = false;
+          if (!servedIds.has(id)) {
+            s.servedIds.push(id);
+            touched = true;
+          }
+          if (!servedKeys.has(qKey)) {
+            s.servedQuestionKeys.push(qKey);
+            touched = true;
+          }
+          if (touched) {
+            if (DEBUG) console.log('[quiz] served', id, qKey, 'index', s.run.index);
             App.persistNow();
           }
-          return this.byId(s.currentQuestionId);
+
+          return q;
         },
         check(question, picked) {
           const correct = Array.isArray(question.correctIndices) ? question.correctIndices.slice().sort() : (Number.isInteger(question.correctIndex) ? [question.correctIndex] : []);
@@ -6403,9 +6423,18 @@
           s.sessionStartedAt = Date.now();
           s.phase = 'running';
           s.summary = null;
-          const uniqueQueue = [...new Map(queue.map((q) => [q.id, q])).values()].map((q) => q.id);
+          const uniqueQueueItems = [];
+          const seenQuestionKeys = new Set();
+          for (const item of queue) {
+            const key = normalizeQuestionKey(item.question || item.id);
+            if (seenQuestionKeys.has(key)) continue;
+            seenQuestionKeys.add(key);
+            uniqueQueueItems.push(item);
+          }
+          const uniqueQueue = uniqueQueueItems.map((q) => q.id);
           s.run = { queue: uniqueQueue, index: 0, results: [], topics: {} };
           s.servedIds = [];
+          s.servedQuestionKeys = [];
           s.answeredIds = [];
           if (DEBUG) console.log('[quiz] start', { mode: s.mode, total: uniqueQueue.length, bank: setup.bankSelection });
           s.currentQuestionId = null;
@@ -6573,7 +6602,16 @@
           App.render();
         },
         repeatMistakesRun() {
-          const last = [...new Set(App.state.stats.mistakes.slice(0, 10).map((m) => m.id))];
+          const rawLast = [...new Set(App.state.stats.mistakes.slice(0, 10).map((m) => m.id))];
+          const last = [];
+          const seenKeys = new Set();
+          for (const id of rawLast) {
+            const q = this.byId(id);
+            const key = normalizeQuestionKey(q && q.question ? q.question : id);
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
+            last.push(id);
+          }
           if (!last.length) {
             App.flash('Nessun errore recente da ripetere.');
             return;
@@ -6581,6 +6619,7 @@
           const s = App.state.study;
           s.run = { queue: last, index: 0, results: [], topics: {} };
           s.servedIds = [];
+          s.servedQuestionKeys = [];
           s.answeredIds = [];
           s.phase = 'running';
           s.mode = 'studio';
@@ -7517,6 +7556,15 @@
           [out[i], out[j]] = [out[j], out[i]];
         }
         return out;
+      }
+
+      function normalizeQuestionKey(text) {
+        return String(text || '')
+          .normalize('NFD')
+          .replace(/[̀-ͯ]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
       }
 
       function labelPool(pool) {
