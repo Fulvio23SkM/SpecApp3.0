@@ -1003,6 +1003,7 @@
       const PROFILE_MIGRATED_FLAG_KEY = 'specapp_migrated_to_profiles_v1';
       const APP_VERSION_GLOBAL_KEY = 'specapp_app_version';
       const LEGACY_KEYS = ['medspecapp.v3', 'medspecapp.v2', 'medspecapp.v1', 'medspecapp'];
+      const DEBUG = false;
       const ROUTES = ['home', 'study', 'stats', 'settings', 'primoAppello'];
       const SUBJECTS = ['Neurologia', 'Oncologia e cure palliative', 'Cardiovascolare', 'Respiratorio', 'Nefrologia', 'Medicina Interna', 'Geriatria'];
 
@@ -5855,6 +5856,8 @@
           explanationVisible: false,
           phase: 'idle',
           run: { queue: [], index: 0, results: [], topics: {} },
+          servedIds: [],
+          answeredIds: [],
           summary: null,
           pendingNav: null
         },
@@ -6319,7 +6322,7 @@
               for (const sub of SUBJECTS) {
                 const arr = bySub[sub];
                 if (!arr.length) continue;
-                examQueue.push(arr[Math.floor(Math.random() * arr.length)]);
+                examQueue.push(arr.shift());
                 moved = true;
                 if (examQueue.length >= 90) break;
               }
@@ -6348,15 +6351,28 @@
         ensureCurrentQuestion() {
           const s = App.state.study;
           if (s.phase !== 'running') return null;
+          s.servedIds = Array.isArray(s.servedIds) ? s.servedIds : [];
+          const served = new Set(s.servedIds);
+
+          while (s.run.index < s.run.queue.length && served.has(s.run.queue[s.run.index])) {
+            s.run.index += 1;
+          }
+
           const id = s.run.queue[s.run.index];
           if (!id) return null;
+
           if (s.currentQuestionId !== id) {
             s.currentQuestionId = id;
+            if (!served.has(id)) {
+              s.servedIds.push(id);
+              if (DEBUG) console.log('[quiz] served', id, 'index', s.run.index);
+            }
             s.selectedAnswers = [];
             s.answered = false;
             s.feedback = '';
             s.explanationVisible = false;
             App.state.lastQuestionStartAt = Date.now();
+            App.persistNow();
           }
           return this.byId(s.currentQuestionId);
         },
@@ -6387,8 +6403,12 @@
           s.sessionStartedAt = Date.now();
           s.phase = 'running';
           s.summary = null;
-          s.run = { queue: queue.map((q) => q.id), index: 0, results: [], topics: {} };
-          s.currentQuestionId = s.run.queue[0] || null;
+          const uniqueQueue = [...new Map(queue.map((q) => [q.id, q])).values()].map((q) => q.id);
+          s.run = { queue: uniqueQueue, index: 0, results: [], topics: {} };
+          s.servedIds = [];
+          s.answeredIds = [];
+          if (DEBUG) console.log('[quiz] start', { mode: s.mode, total: uniqueQueue.length, bank: setup.bankSelection });
+          s.currentQuestionId = null;
           s.selectedAnswers = [];
           s.selectedIndex = null;
           s.confirmed = false;
@@ -6470,6 +6490,8 @@
             st.stats.mistakes = st.stats.mistakes.slice(0, 50);
           }
 
+          s.answeredIds = Array.isArray(s.answeredIds) ? s.answeredIds : [];
+          if (!s.answeredIds.includes(q.id)) s.answeredIds.push(q.id);
           s.run.results.push({ id: q.id, ok, topic: q.topic, focus: s.focus });
           s.bestFocusRun = Math.max(s.bestFocusRun || 0, s.focus || 0);
           s.run.topics[q.topic] = s.run.topics[q.topic] || { ok: 0, bad: 0 };
@@ -6499,7 +6521,7 @@
             return;
           }
           s.run.index += 1;
-          s.currentQuestionId = s.run.queue[s.run.index] || null;
+          s.currentQuestionId = null;
           s.selectedAnswers = [];
           s.selectedIndex = null;
           s.confirmed = false;
@@ -6551,13 +6573,15 @@
           App.render();
         },
         repeatMistakesRun() {
-          const last = App.state.stats.mistakes.slice(0, 10).map((m) => m.id);
+          const last = [...new Set(App.state.stats.mistakes.slice(0, 10).map((m) => m.id))];
           if (!last.length) {
             App.flash('Nessun errore recente da ripetere.');
             return;
           }
           const s = App.state.study;
           s.run = { queue: last, index: 0, results: [], topics: {} };
+          s.servedIds = [];
+          s.answeredIds = [];
           s.phase = 'running';
           s.mode = 'studio';
           s.timerEndsAt = null;
@@ -6565,7 +6589,7 @@
           s.focus = 55;
           s.bestFocusRun = 55;
           s.sessionStartedAt = Date.now();
-          s.currentQuestionId = last[0];
+          s.currentQuestionId = null;
           s.selectedAnswers = [];
           s.selectedIndex = null;
           s.confirmed = false;
@@ -6989,12 +7013,14 @@
           requestAnimationFrame(() => { $view.scrollTop = restore; ScrollSystem.onScroll(); });
         },
 
+        persistNow() {
+          Data.safeSetProfileState(Profiles.activeId(), this.state);
+          localStorage.setItem(APP_VERSION_GLOBAL_KEY, APP_VERSION);
+        },
+
         persist() {
           clearTimeout(this.saveTimer);
-          this.saveTimer = window.setTimeout(() => {
-            Data.safeSetProfileState(Profiles.activeId(), this.state);
-            localStorage.setItem(APP_VERSION_GLOBAL_KEY, APP_VERSION);
-          }, 80);
+          this.saveTimer = window.setTimeout(() => this.persistNow(), 80);
         },
 
         flash(text) {
