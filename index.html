@@ -117,6 +117,8 @@
     .brand h1 { margin: 0; font-size: 18px; letter-spacing: .2px; }
     .subhead { margin-top: 2px; font-size: 12px; color: var(--text-secondary); }
 
+    .header-right { display:flex; align-items:center; gap:8px; }
+
     .pill {
       border-radius: 999px;
       border: 1px solid var(--border-soft);
@@ -825,7 +827,10 @@
         <div id="headerMicrocopy" class="subhead">Hai già perso troppo tempo. Inizia.</div>
       </div>
     </div>
-    <div id="headerPill" class="pill">Serie 0</div>
+    <div class="header-right">
+      <button id="profileButton" class="pill" data-action="open-profile-sheet">Profilo: FAZZIO</button>
+      <div id="headerPill" class="pill">Serie 0</div>
+    </div>
   </header>
 
   <div class="app-layout" style="height:calc(100dvh - var(--header-h,64px));height:calc(100vh - var(--header-h,64px));">
@@ -955,13 +960,32 @@
     </div>
   </section>
 
+  <section id="profileSheet" class="sheet center" aria-label="Gestione profili">
+    <div class="sheet-handle"></div>
+    <h3 style="margin:0 0 var(--space-sm);">Profili</h3>
+    <div id="profileList" class="stack" style="margin-bottom:var(--space-sm);"></div>
+    <div class="chips">
+      <button class="btn ghost" data-action="profile-new">Nuovo profilo</button>
+      <button class="btn ghost" data-action="profile-rename">Rinomina</button>
+      <button class="btn ghost" data-action="profile-duplicate">Duplica</button>
+      <button class="btn ghost" data-action="profile-delete">Elimina</button>
+    </div>
+    <div class="chips" style="margin-top:var(--space-sm);">
+      <button class="btn ghost" data-action="profile-export">Esporta profilo</button>
+      <button class="btn ghost" data-action="profile-import">Importa profilo</button>
+      <button class="btn primary" data-action="close-profile-sheet">Chiudi</button>
+    </div>
+  </section>
+  <input id="profileImportInput" type="file" accept="application/json" style="display:none;" />
+
 
   <section id="welcomeSplash" class="welcome-splash" aria-label="Benvenuto">
     <div class="splash-card glass">
       <div class="splash-logo">M</div>
       <h2>Benvenuto in MedSpecAPP</h2>
       <p id="splashLine" class="muted">Carico una dose di disciplina intelligente...</p>
-      <button class="btn primary" data-action="close-splash">Entra</button>
+      <div id="splashProfiles" class="chips" style="justify-content:center; margin-top:var(--space-sm);"></div>
+      <button id="splashEnterBtn" class="btn primary" data-action="close-splash" disabled>Entra</button>
     </div>
   </section>
 
@@ -974,9 +998,11 @@
     (function () {
       'use strict';
 
-      const APP_VERSION = '5.0';
-      const STORAGE_KEY = 'medspecapp.v3';
-      const LEGACY_KEYS = ['medspecapp.v2', 'medspecapp.v1', 'medspecapp'];
+      const APP_VERSION = '3.0.1';
+      const PROFILE_REGISTRY_KEY = 'specapp_profiles_v1';
+      const PROFILE_MIGRATED_FLAG_KEY = 'specapp_migrated_to_profiles_v1';
+      const APP_VERSION_GLOBAL_KEY = 'specapp_app_version';
+      const LEGACY_KEYS = ['medspecapp.v3', 'medspecapp.v2', 'medspecapp.v1', 'medspecapp'];
       const ROUTES = ['home', 'study', 'stats', 'settings', 'primoAppello'];
       const SUBJECTS = ['Neurologia', 'Oncologia e cure palliative', 'Cardiovascolare', 'Respiratorio', 'Nefrologia', 'Medicina Interna', 'Geriatria'];
 
@@ -988,10 +1014,16 @@
       const $exitSheet = document.getElementById('exitSheet');
       const $quizErrorSheet = document.getElementById('quizErrorSheet');
       const $quizErrorText = document.getElementById('quizErrorText');
+      const $profileSheet = document.getElementById('profileSheet');
+      const $profileList = document.getElementById('profileList');
+      const $profileButton = document.getElementById('profileButton');
+      const $profileImportInput = document.getElementById('profileImportInput');
       const $scrollIndicator = document.getElementById('scrollIndicator');
       const $scrollThumb = document.getElementById('scrollThumb');
       const $welcomeSplash = document.getElementById('welcomeSplash');
       const $splashLine = document.getElementById('splashLine');
+      const $splashProfiles = document.getElementById('splashProfiles');
+      const $splashEnterBtn = document.getElementById('splashEnterBtn');
 
       const BANK_GENERALI_RAW = [
         {
@@ -5845,22 +5877,84 @@
         }
       };
 
+      /***** PROFILE LAYER *****/
+      const Profiles = {
+        registry: null,
+        loadRegistry() {
+          const raw = Data.safeGetRaw(PROFILE_REGISTRY_KEY);
+          if (raw && Array.isArray(raw.profiles) && raw.profiles.length) {
+            this.registry = raw;
+          } else {
+            const now = Date.now();
+            this.registry = {
+              activeProfileId: 'fazzio',
+              profiles: [
+                { id: 'fazzio', name: 'FAZZIO', createdAt: now, lastUsedAt: now },
+                { id: 'guest', name: 'GUEST', createdAt: now, lastUsedAt: now }
+              ]
+            };
+            Data.safeSetRaw(PROFILE_REGISTRY_KEY, this.registry);
+          }
+          this.ensureLegacyMigration();
+          return this.registry;
+        },
+        ensureLoaded() {
+          if (!this.registry) this.loadRegistry();
+          return this.registry;
+        },
+        activeId() { return this.ensureLoaded().activeProfileId; },
+        activeProfile() { return this.ensureLoaded().profiles.find((p) => p.id === this.activeId()) || this.ensureLoaded().profiles[0]; },
+        profileStateKey(id) { return `specapp::${id}::state`; },
+        saveRegistry() { Data.safeSetRaw(PROFILE_REGISTRY_KEY, this.registry); },
+        touch(profileId) {
+          const p = this.registry.profiles.find((x) => x.id === profileId);
+          if (p) p.lastUsedAt = Date.now();
+          this.registry.activeProfileId = profileId;
+          this.saveRegistry();
+        },
+        createProfile(name) {
+          const id = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
+          const now = Date.now();
+          const profile = { id, name: String(name || 'Profilo').trim().slice(0, 24) || 'Profilo', createdAt: now, lastUsedAt: now };
+          this.registry.profiles.push(profile);
+          this.saveRegistry();
+          return profile;
+        },
+        removeProfile(profileId) {
+          if (this.registry.profiles.length <= 1) return false;
+          this.registry.profiles = this.registry.profiles.filter((p) => p.id !== profileId);
+          const keysToDelete = [];
+          for (let i = 0; i < localStorage.length; i += 1) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith(`specapp::${profileId}::`)) keysToDelete.push(k);
+          }
+          keysToDelete.forEach((k) => localStorage.removeItem(k));
+          if (this.registry.activeProfileId === profileId) this.registry.activeProfileId = this.registry.profiles[0].id;
+          this.saveRegistry();
+          return true;
+        },
+        ensureLegacyMigration() {
+          if (localStorage.getItem(PROFILE_MIGRATED_FLAG_KEY)) return;
+          let legacy = null;
+          for (const key of LEGACY_KEYS) {
+            const old = Data.safeGetRaw(key);
+            if (old && typeof old === 'object') { legacy = old; break; }
+          }
+          if (legacy) Data.safeSetRaw(this.profileStateKey('fazzio'), legacy);
+          localStorage.setItem(PROFILE_MIGRATED_FLAG_KEY, '1');
+        }
+      };
+
       /***** DATA LAYER *****/
       const Data = {
         load() {
           const base = structuredClone(defaultState);
-          const current = this.safeGet(STORAGE_KEY);
+          Profiles.ensureLoaded();
+          const current = this.safeGetProfileState(Profiles.activeId());
           if (current) return this.migrate(base, current);
-          for (const key of LEGACY_KEYS) {
-            const old = this.safeGet(key);
-            if (!old) continue;
-            const migrated = this.migrate(base, old);
-            this.safeSet(STORAGE_KEY, migrated);
-            return migrated;
-          }
           return base;
         },
-        safeGet(key) {
+        safeGetRaw(key) {
           try {
             const raw = localStorage.getItem(key);
             if (!raw) return null;
@@ -5868,7 +5962,7 @@
             return parsed && typeof parsed === 'object' ? parsed : null;
           } catch (_) { return null; }
         },
-        safeSet(key, value) {
+        safeSetRaw(key, value) {
           try { localStorage.setItem(key, JSON.stringify(value)); }
           catch (_) {
             try {
@@ -5876,6 +5970,12 @@
               localStorage.setItem(key, JSON.stringify(value));
             } catch (__){ }
           }
+        },
+        safeGetProfileState(profileId) {
+          return this.safeGetRaw(Profiles.profileStateKey(profileId));
+        },
+        safeSetProfileState(profileId, value) {
+          this.safeSetRaw(Profiles.profileStateKey(profileId), value);
         },
         safeObj(obj) { return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {}; },
         safePool(pool) { return { attempts: Number(pool && pool.attempts) || 0, correct: Number(pool && pool.correct) || 0 }; },
@@ -5969,10 +6069,13 @@
             $quizErrorSheet.classList.add('open');
             if (desktop) $quizErrorSheet.classList.add('desktop-open', 'center');
           }
+          if (type === 'profile') {
+            $profileSheet.classList.add('open', 'desktop-open', 'center');
+          }
         },
         closeSheets() {
           $backdrop.classList.remove('open');
-          [$setupSheet, $exitSheet, $quizErrorSheet].forEach((el) => el.classList.remove('open', 'desktop-open', 'center'));
+          [$setupSheet, $exitSheet, $quizErrorSheet, $profileSheet].forEach((el) => el.classList.remove('open', 'desktop-open', 'center'));
         }
       };
 
@@ -6800,13 +6903,17 @@
 
       const App = {
         state: Data.load(),
+        profiles: Profiles.ensureLoaded(),
         saveTimer: 0,
         noticeTimer: 0,
+        splashSelectedProfileId: null,
 
         init() {
           UI.applyTheme(this.state.theme);
           this.showSplash();
           this.mount();
+          this.refreshProfileHeader();
+          this.checkVersionNotice();
           this.navigate(this.state.route, true);
           this.persist();
           // Suggerimento futuro 1: mini onboarding con shortcut tastiera e setup guidato (low-risk)
@@ -6824,7 +6931,16 @@
             'Se volevi caos, hai sbagliato app.'
           ];
           $splashLine.textContent = lines[Math.floor(Math.random() * lines.length)];
+          this.renderSplashProfiles();
           $welcomeSplash.classList.add('open');
+        },
+
+        renderSplashProfiles() {
+          if (!$splashProfiles) return;
+          const reg = Profiles.ensureLoaded();
+          this.splashSelectedProfileId = null;
+          if ($splashEnterBtn) $splashEnterBtn.disabled = true;
+          $splashProfiles.innerHTML = reg.profiles.map((p) => `<button class="btn ghost" data-action="select-splash-profile" data-profile="${p.id}">${p.name}</button>`).join('');
         },
 
         mount() {
@@ -6875,7 +6991,10 @@
 
         persist() {
           clearTimeout(this.saveTimer);
-          this.saveTimer = window.setTimeout(() => Data.safeSet(STORAGE_KEY, this.state), 80);
+          this.saveTimer = window.setTimeout(() => {
+            Data.safeSetProfileState(Profiles.activeId(), this.state);
+            localStorage.setItem(APP_VERSION_GLOBAL_KEY, APP_VERSION);
+          }, 80);
         },
 
         flash(text) {
@@ -6906,6 +7025,56 @@
             'Micro-sessioni quotidiane, voto grosso.'
           ];
           return lines[(Date.now() + this.state.stats.streak) % lines.length];
+        },
+
+        refreshProfileHeader() {
+          const active = Profiles.activeProfile();
+          if ($profileButton && active) $profileButton.textContent = `Profilo: ${active.name}`;
+        },
+
+        checkVersionNotice() {
+          const prev = localStorage.getItem(APP_VERSION_GLOBAL_KEY) || '';
+          if (prev && prev !== APP_VERSION) {
+            this.flash('Aggiornamento disponibile: ricarica');
+            setTimeout(() => {
+              if (confirm('Aggiornamento disponibile. Ricaricare ora?')) location.reload();
+            }, 200);
+          }
+          localStorage.setItem(APP_VERSION_GLOBAL_KEY, APP_VERSION);
+        },
+
+        openProfileSheet() {
+          this.renderProfileList();
+          UI.openSheet('profile');
+        },
+
+        renderProfileList() {
+          if (!$profileList) return;
+          const reg = Profiles.ensureLoaded();
+          $profileList.innerHTML = reg.profiles.map((p) => `<label class="row" style="cursor:pointer;"><span>${p.name}</span><input type="radio" name="activeProfile" value="${p.id}" ${reg.activeProfileId === p.id ? 'checked' : ''} /></label>`).join('');
+        },
+
+        switchProfile(profileId) {
+          if (!profileId || profileId === Profiles.activeId()) return;
+          this.persist();
+          Profiles.touch(profileId);
+          this.state = Data.load();
+          this.refreshProfileHeader();
+          this.navigate(this.state.route || 'home', true);
+          this.persist();
+        },
+
+        exportActiveProfile() {
+          const active = Profiles.activeProfile();
+          if (!active) return;
+          const payload = { profile: active, appVersion: APP_VERSION, data: Data.safeGetProfileState(active.id) || structuredClone(defaultState) };
+          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `specapp-profile-${active.name}.json`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 250);
         },
 
         renderSetupSubjects() {
@@ -7039,10 +7208,73 @@
           if (!(node instanceof HTMLElement)) return;
           const action = node.dataset.action;
 
+          if (action === 'select-splash-profile') {
+            this.splashSelectedProfileId = node.dataset.profile || null;
+            if ($splashProfiles) {
+              $splashProfiles.querySelectorAll('[data-action="select-splash-profile"]').forEach((b) => {
+                b.classList.toggle('soft', b.getAttribute('data-profile') === this.splashSelectedProfileId);
+                b.classList.toggle('ghost', b.getAttribute('data-profile') !== this.splashSelectedProfileId);
+              });
+            }
+            if ($splashEnterBtn) $splashEnterBtn.disabled = !this.splashSelectedProfileId;
+            return;
+          }
+
           if (action === 'close-splash') {
+            if (!this.splashSelectedProfileId) {
+              this.flash('Seleziona un profilo per iniziare.');
+              return;
+            }
+            if (this.splashSelectedProfileId !== Profiles.activeId()) this.switchProfile(this.splashSelectedProfileId);
             $welcomeSplash?.classList.remove('open');
             return;
           }
+
+          if (action === 'open-profile-sheet') { this.openProfileSheet(); return; }
+          if (action === 'close-profile-sheet') { UI.closeSheets(); return; }
+          if (action === 'profile-new') {
+            const name = prompt('Nome nuovo profilo:', 'NUOVO');
+            if (!name) return;
+            const profile = Profiles.createProfile(name);
+            this.switchProfile(profile.id);
+            UI.closeSheets();
+            return;
+          }
+          if (action === 'profile-rename') {
+            const active = Profiles.activeProfile();
+            if (!active) return;
+            const name = prompt('Nuovo nome profilo:', active.name);
+            if (!name) return;
+            active.name = name.trim().slice(0, 24) || active.name;
+            Profiles.saveRegistry();
+            this.refreshProfileHeader();
+            this.renderProfileList();
+            return;
+          }
+          if (action === 'profile-duplicate') {
+            const active = Profiles.activeProfile();
+            if (!active) return;
+            const clone = Profiles.createProfile(`${active.name}_COPY`);
+            Data.safeSetProfileState(clone.id, structuredClone(this.state));
+            this.renderProfileList();
+            return;
+          }
+          if (action === 'profile-delete') {
+            const active = Profiles.activeProfile();
+            if (!active) return;
+            if (Profiles.registry.profiles.length <= 1) { this.flash("Non puoi eliminare l'ultimo profilo."); return; }
+            if (active.name === 'GUEST' && !confirm('Confermi eliminazione profilo GUEST?')) return;
+            if (!confirm(`Eliminare profilo ${active.name}?`)) return;
+            Profiles.removeProfile(active.id);
+            this.state = Data.load();
+            this.refreshProfileHeader();
+            this.navigate('home', true);
+            this.persist();
+            UI.closeSheets();
+            return;
+          }
+          if (action === 'profile-export') { this.exportActiveProfile(); return; }
+          if (action === 'profile-import') { $profileImportInput?.click(); return; }
 
           if (action === 'logo-tap') {
             this.state.logoTapCount += 1;
@@ -7055,6 +7287,7 @@
             return;
           }
 
+          if ((action === 'open-setup' || action === 'start-setup') && Date.now() < iosTapBypassUntil) return;
           if (action === 'open-setup') { this.openSetup(); return; }
           if (action === 'close-setup') { UI.closeSheets(); return; }
           if (action === 'start-setup') { this.startFromSetup(); return; }
@@ -7164,6 +7397,8 @@
         }
       };
 
+      let iosTapBypassUntil = 0;
+
       document.addEventListener('click', (e) => {
         const t = e.target;
         if (!(t instanceof HTMLElement)) return;
@@ -7181,6 +7416,57 @@
           App.state.setupDraft[t.dataset.setup] = t.dataset.value;
           if (t.dataset.setup === 'bankSelection') App.state.selectedPool = t.dataset.value;
           App.refreshSetupButtons();
+        }
+      });
+
+
+      document.addEventListener('touchend', (e) => {
+        const t = e.target;
+        if (!(t instanceof HTMLElement)) return;
+        const node = t.closest('[data-action]');
+        if (!(node instanceof HTMLElement)) return;
+        const action = node.dataset.action;
+        if (action !== 'open-setup' && action !== 'start-setup') return;
+        iosTapBypassUntil = Date.now() + 700;
+        e.preventDefault();
+        if (action === 'open-setup') App.openSetup();
+        if (action === 'start-setup') App.startFromSetup();
+      }, { passive: false });
+
+      document.addEventListener('change', (e) => {
+        const t = e.target;
+        if (!(t instanceof HTMLInputElement)) return;
+        if (t.name !== 'activeProfile') return;
+        App.switchProfile(t.value);
+        UI.closeSheets();
+      });
+
+      $profileImportInput?.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(text);
+          if (!parsed || !parsed.profile || !parsed.data) throw new Error('invalid');
+          let targetId = String(parsed.profile.id || '');
+          const existing = Profiles.registry.profiles.find((p) => p.id === targetId);
+          if (existing) {
+            const overwrite = confirm('Profilo già presente. Sovrascrivere?');
+            if (!overwrite) {
+              const created = Profiles.createProfile(`${parsed.profile.name || 'Importato'}_NEW`);
+              targetId = created.id;
+            }
+          } else {
+            Profiles.registry.profiles.push({ id: targetId || Profiles.createProfile(parsed.profile.name || 'Importato').id, name: parsed.profile.name || 'Importato', createdAt: Date.now(), lastUsedAt: Date.now() });
+            Profiles.saveRegistry();
+          }
+          Data.safeSetProfileState(targetId, parsed.data);
+          App.flash('Profilo importato.');
+          App.renderProfileList();
+        } catch (_) {
+          App.flash('Import non valido. Nessun dato modificato.');
+        } finally {
+          e.target.value = '';
         }
       });
 
@@ -7249,4 +7535,3 @@
   </script>
 </body>
 </html>
-
