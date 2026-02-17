@@ -294,6 +294,33 @@
       align-items: start;
     }
 
+    .study-side {
+      display: none;
+      gap: var(--space-sm);
+      align-content: start;
+      position: sticky;
+      top: var(--space-lg);
+    }
+
+    .study-side .card {
+      border-radius: 18px;
+      padding: 12px;
+    }
+
+    .study-side h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .study-side .stack {
+      gap: 8px;
+    }
+
+    .study-side .row {
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
     .question-card {
       border-radius: var(--radius-large);
       padding: var(--space-lg);
@@ -765,6 +792,7 @@
       .bottom-nav { display: none; }
       #view-container { padding: var(--space-lg); }
       .study-grid { grid-template-columns: 1.35fr .95fr; }
+      .study-side { display: grid; }
       .sheet { display: none; }
       .sheet.desktop-open { display: block; }
       .scroll-indicator { display: block; }
@@ -6606,8 +6634,39 @@
             answers += `<button class="${cls}" ${s.study.answered ? 'disabled' : ''} data-answer="${idx}">${idx + 1}. ${ans}</button>`;
           });
 
-          const side = '';
+          const setLabel = q.set === 'febbraio2026' ? 'Primo Appello' : 'Generali';
+          const side = `
+            <aside class="study-side" aria-label="Pannello rapido studio">
+              <article class="card glass">
+                <h3>Dettagli domanda</h3>
+                <div class="stack">
+                  <div class="row"><span>Materia</span><span class="muted">${q.topic}</span></div>
+                  <div class="row"><span>Set</span><span class="muted">${setLabel}</span></div>
+                  <div class="row"><span>ID</span><span class="muted">${q.id}</span></div>
+                </div>
+              </article>
 
+              <article class="card glass">
+                <h3>Sessione</h3>
+                <div class="stack">
+                  <div class="row"><span>Modalità</span><span class="muted">${labelMode(s.study.mode)}</span></div>
+                  <div class="row"><span>Completamento</span><span class="muted">${progress}%</span></div>
+                  <div class="row"><span>Segnalibri</span><span class="muted">${Object.keys(s.bookmarks).length}</span></div>
+                </div>
+                <div class="btn-row" style="margin-top:10px;">
+                  <button class="btn ${bookmarked ? 'soft' : 'ghost'}" data-action="toggle-bookmark">${bookmarked ? 'Segnata' : 'Segna per dopo'}</button>
+                </div>
+              </article>
+
+              <article class="card glass">
+                <h3>Scorciatoie</h3>
+                <div class="stack">
+                  <div class="row"><span>Invio</span><span class="muted">Conferma</span></div>
+                  <div class="row"><span>Spazio</span><span class="muted">Prossima</span></div>
+                </div>
+              </article>
+            </aside>
+          `;
 
           return UI.frag(`
             <section class="view study-grid${s.study.antiPanic ? ' anti-panic' : ''}">
@@ -7190,3 +7249,4 @@
   </script>
 </body>
 </html>
+
